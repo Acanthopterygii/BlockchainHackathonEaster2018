@@ -89,67 +89,57 @@ public class Blockchain {
     Performance and storage must be in O(1) regardless of the length of the blockchain.
      */
 
-    static int POW_RETARGET_DEPTH = 10;
+    static int POW_RETARGET_DEPTH = 12;
     static int WE_WANT_X_POW_PER_MINUTE = 10;
+    static int DESIRED_AVG_TRANSACTION_TIME = 60 / WE_WANT_X_POW_PER_MINUTE;
+    static double POW_RETARGET_STEEPNESS = 1.35d; // small value = flat retargeting; big value = steep retargeting.
+    static double ALLOWED_AVG_TRANSACTION_TIME_ERROR = 0.7d; // skip retargeting if error is below.
     private static void retarget() {
         // here, retarget the target value!!!
-        int powcnt = 0;
-        double nTargetTimespan = 0;
-        double nActualTimespan = 0;
-        long powTarget = 0;
-
-
-        int powMass = 0;
-        int totalDuration = 0;
-        long targetMass = 0;
-        for(int i=log.size()-1; i>=Math.max(log.size() - POW_RETARGET_DEPTH, 0); --i) {
-            powMass += ((Block)log.get(i)).number;
-            totalDuration += ((Block)log.get(i)).duration;
-            targetMass =+ ((Block)log.get(i)).target;
+    	if (log.size() > 0) {
+        	Block b = (Block)log.get(log.size() - 1);
+        	double lastAvgTime = (0.5d + b.duration) / (double)b.number;
+        	if (Math.abs(lastAvgTime - DESIRED_AVG_TRANSACTION_TIME) < ALLOWED_AVG_TRANSACTION_TIME_ERROR) {
+                Logger.getGlobal().info("error below threshold - skip retargeting");
+        		return;
+        	}
+    	}
+    	double retargetSteepness = POW_RETARGET_STEEPNESS;
+        double weightedTotalTxCount = 1;
+        double weightedTotalDuration = DESIRED_AVG_TRANSACTION_TIME;
+        int count = Math.min(POW_RETARGET_DEPTH, (log.size() + 1) / 2);
+        for(int i = count; i > 0; --i) {
+        	double weight = count + 1 - i;
+        	Block b = (Block)log.get(log.size() - i);
+        	if (b.number == 0) {
+          	    weightedTotalTxCount += weight;
+                weightedTotalDuration += weight * 60d;
+        	} else {
+                weightedTotalTxCount += weight * b.number;
+                weightedTotalDuration += weight * (0.5d + b.duration); // milliseconds are cut off, i.e., floor(seconds)
+        	}
+        	retargetSteepness = POW_RETARGET_STEEPNESS;
+        	if (b.number == 0 || b.number == limit)
+        		retargetSteepness *= 1.8d;
         }
+        // flatten retargeting a bit
+        if (retargetSteepness == POW_RETARGET_STEEPNESS && count * 3 > POW_RETARGET_DEPTH * 2)
+        	retargetSteepness = Math.pow(retargetSteepness, 0.7d);
 
+        double weightedAvgTransactionTime = weightedTotalDuration / weightedTotalTxCount;
+        double multiplicator = Math.pow(weightedAvgTransactionTime / DESIRED_AVG_TRANSACTION_TIME, retargetSteepness);
+        BigInteger mult = BigInteger.valueOf((long)(multiplicator*10000));
 
-
-        // Dirty fix, always assume a pow of one, otherwise things just stall
-        if(powMass==0) powMass = 1;
-
-        double darkTarget = (double)targetMass;
-        darkTarget /= log.size();
-        nActualTimespan = totalDuration;
-
-        nTargetTimespan = nActualTimespan;
-        nTargetTimespan = powMass * (60 / WE_WANT_X_POW_PER_MINUTE);
-
-        if (nActualTimespan < nTargetTimespan / 3.0)
-            nActualTimespan = nTargetTimespan / 3.0;
-        if (nActualTimespan > nTargetTimespan * 3.0)
-            nActualTimespan = nTargetTimespan * 3.0;
-
-        double tmp = darkTarget;
-        darkTarget = (darkTarget / nTargetTimespan)*nActualTimespan;
-
-        if((nActualTimespan>nTargetTimespan && darkTarget<tmp) || (darkTarget > Long.MAX_VALUE / 100)){
-            darkTarget = Long.MAX_VALUE / 100;
-        }
-        else if((nActualTimespan<nTargetTimespan  && darkTarget>tmp) || (darkTarget < 1)){
-            darkTarget = 1;
-        }
-        powTarget = (long)darkTarget;
-
-
-        BigInteger myTarget = MAXIMAL_WORK_TARGET;
-        myTarget = myTarget.divide(BigInteger.valueOf(Long.MAX_VALUE/100)); // Note, our target in compact form is in range 1..LONG_MAX/100
-        myTarget = myTarget.multiply(BigInteger.valueOf(powTarget));
-        if(myTarget.compareTo(MAXIMAL_WORK_TARGET) == 1)
-            myTarget = MAXIMAL_WORK_TARGET;
-        if(myTarget.compareTo(BigInteger.ONE) == 2)
-            myTarget = BigInteger.ONE;
-        ((Block)(log.get(log.size()-1))).target = powTarget;
-
-        CURRENT = myTarget;
-        Logger.getGlobal().info("new minimal target = " + myTarget.toString(16) + ", powT = " + powTarget + ", lastpowT = " +  targetMass + ", #blocks = " + log.size() + ", powMass = " + powMass + ", actTime = " + nActualTimespan + ", targetTime = " + nTargetTimespan + ", adjRatio = " + (nActualTimespan/nTargetTimespan));
+        // We assume that CURRENT will never be changed outside of retarget
+        // Otherwise one would need a field that stores this value - it's an easy modification
+        CURRENT = CURRENT.multiply(mult).divide(BigInteger.valueOf(10000));
+        if(CURRENT.compareTo(MAXIMAL_WORK_TARGET) == 1)
+        	CURRENT = MAXIMAL_WORK_TARGET;
+        else if(CURRENT.compareTo(BigInteger.ZERO) < 1)
+        	CURRENT = BigInteger.ONE;
+        Logger.getGlobal().info("multiplicator = " + multiplicator + "; weightedAvgTransactionTime = " + weightedAvgTransactionTime);
     }
-
+ 
     /* End of editing section
      */
 
