@@ -89,11 +89,15 @@ public class Blockchain {
     Performance and storage must be in O(1) regardless of the length of the blockchain.
      */
 
-    static int POW_RETARGET_DEPTH = 12;
+    static int POW_RETARGET_DEPTH = 10;
     static int WE_WANT_X_POW_PER_MINUTE = 10;
     static int DESIRED_AVG_TRANSACTION_TIME = 60 / WE_WANT_X_POW_PER_MINUTE;
-    static double POW_RETARGET_STEEPNESS = 1.35d; // small value = flat retargeting; big value = steep retargeting.
-    static double ALLOWED_AVG_TRANSACTION_TIME_ERROR = 0.7d; // skip retargeting if error is below.
+    // POW_RETARGET_STEEPNESS defines the retargeting steepness. small value = flat retargeting; big value = steep retargeting.
+    // 0 < POW_RETARGET_STEEPNESS < 10  --  Values between 0.2 and 2 are recommended.
+    static double POW_RETARGET_STEEPNESS = 1.1d;
+    // ALLOWED_AVG_TRANSACTION_TIME_ERROR is used to skip retargeting if error is below this threshold.
+    // 0 <= ALLOWED_AVG_TRANSACTION_TIME_ERROR < 10  --  Values between 0.2 and 2 are recommended.
+    static double ALLOWED_AVG_TRANSACTION_TIME_ERROR = 1.1d;
     private static void retarget() {
         // here, retarget the target value!!!
     	if (log.size() > 0) {
@@ -119,12 +123,20 @@ public class Blockchain {
                 weightedTotalDuration += weight * (0.5d + b.duration); // milliseconds are cut off, i.e., floor(seconds)
         	}
         	retargetSteepness = POW_RETARGET_STEEPNESS;
-        	if (b.number == 0 || b.number == limit)
+        	if (b.number == 0 || b.number == limit) {
         		retargetSteepness *= 1.8d;
+        		// Avoid overweighting border cases after we come back to normal.
+        		for (; i > 1; --i) {
+            		Block bNext = (Block)log.get(log.size() - i + 1);
+            		if (b.number != bNext.number)
+            			break;
+                    Logger.getGlobal().info("skipped border case with "+b.number+" transactions");
+        		}
+        	}
         }
         // flatten retargeting a bit
         if (retargetSteepness == POW_RETARGET_STEEPNESS && count * 3 > POW_RETARGET_DEPTH * 2)
-        	retargetSteepness = Math.pow(retargetSteepness, 0.7d);
+        	retargetSteepness *=  0.6d;
 
         double weightedAvgTransactionTime = weightedTotalDuration / weightedTotalTxCount;
         double multiplicator = Math.pow(weightedAvgTransactionTime / DESIRED_AVG_TRANSACTION_TIME, retargetSteepness);
